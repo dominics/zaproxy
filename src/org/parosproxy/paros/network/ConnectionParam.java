@@ -36,7 +36,10 @@
 // ZAP: 2041/08/14 Issue 1305: Outgoing proxy is disabled when updating from old versions
 // ZAP: 2016/08/08 Issue 2742: Allow for override/customization of Java's "networkaddress.cache.ttl" value
 // ZAP: 2017/01/11 Exclude some options from the API (manually handled to return correct values).
-
+// ZAP: 2017/04/14 Validate that the SSL/TLS versions persisted can be set/used.
+// ZAP: 2017/05/02 Added option key to enable / disable HTTP State 
+// ZAP: 2017/05/15 Ensure HttpState is non-null when HTTP State is enabled.
+// ZAP: 2017/06/19 Do not allow to set negative timeout values and expose the default value.
 package org.parosproxy.paros.network;
 
 import java.security.Security;
@@ -85,6 +88,7 @@ public class ConnectionParam extends AbstractParam {
 	private static final String PROXY_CHAIN_PROMPT = CONNECTION_BASE_KEY + ".proxyChain.prompt";
 	private static final String TIMEOUT_IN_SECS = CONNECTION_BASE_KEY + ".timeoutInSecs";
 	private static final String SINGLE_COOKIE_REQUEST_HEADER = CONNECTION_BASE_KEY + ".singleCookieRequestHeader";
+	private static final String HTTP_STATE_ENABLED = CONNECTION_BASE_KEY + ".httpStateEnabled";
 	private static final String DEFAULT_USER_AGENT = CONNECTION_BASE_KEY + ".defaultUserAgent";
 
 	private static final String DEFAULT_DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 6.3; WOW64; rv:39.0) Gecko/20100101 Firefox/39.0";
@@ -106,6 +110,13 @@ public class ConnectionParam extends AbstractParam {
 	 */
 	private static final String DNS_TTL_SUCCESSFUL_QUERIES_KEY = CONNECTION_BASE_KEY + ".dnsTtlSuccessfulQueries";
 
+	/**
+	 * The default connection timeout (in seconds).
+	 * 
+	 * @since TODO add version
+	 */
+	public static final int DEFAULT_TIMEOUT = 20;
+
     private boolean useProxyChain;
 	private String proxyChainName = "";
 	private int proxyChainPort = 8080;
@@ -123,7 +134,7 @@ public class ConnectionParam extends AbstractParam {
 	
 	// ZAP: Added prompt option and timeout
 	private boolean proxyChainPrompt = false;
-	private int timeoutInSecs = 120;
+	private int timeoutInSecs = DEFAULT_TIMEOUT;
 
 	private boolean singleCookieRequestHeader = true;
 	private String defaultUserAgent = "";
@@ -143,6 +154,11 @@ public class ConnectionParam extends AbstractParam {
      * @param httpStateEnabled The httpStateEnabled to set.
      */
     public void setHttpStateEnabled(boolean httpStateEnabled) {
+        setHttpStateEnabledImpl(httpStateEnabled);
+        getConfig().setProperty(HTTP_STATE_ENABLED, Boolean.valueOf(this.httpStateEnabled));
+    }
+
+    private void setHttpStateEnabledImpl(boolean httpStateEnabled) {
         this.httpStateEnabled = httpStateEnabled;
         if (this.httpStateEnabled) {
     	    httpState = new HttpState();
@@ -208,20 +224,23 @@ public class ConnectionParam extends AbstractParam {
         	log.error(e.getMessage(), e);
 		}
 		
+		setTimeoutInSecsImpl(getInt(TIMEOUT_IN_SECS, DEFAULT_TIMEOUT));
+
 		try {
-			setTimeoutInSecs(getConfig().getInt(TIMEOUT_IN_SECS, 20));
-		} catch (Exception e) {
-        	// ZAP: Log exceptions
-        	log.error(e.getMessage(), e);
+			this.singleCookieRequestHeader = getConfig().getBoolean(SINGLE_COOKIE_REQUEST_HEADER, true);
+		} catch (ConversionException e) {
+			log.error("Error while loading the option singleCookieRequestHeader: " + e.getMessage(), e);
 		}
 
-        try {
-            this.singleCookieRequestHeader = getConfig().getBoolean(SINGLE_COOKIE_REQUEST_HEADER, true);
-        } catch (ConversionException e) {
-            log.error("Error while loading the option singleCookieRequestHeader: " + e.getMessage(), e);
-        }
-        
-        try {
+		boolean stateEnabled = false;
+		try {
+			stateEnabled = getConfig().getBoolean(HTTP_STATE_ENABLED, stateEnabled);
+		} catch (ConversionException e) {
+			log.error("Error while loading the option httpStateEnabled: " + e.getMessage(), e);
+		}
+		setHttpStateEnabledImpl(stateEnabled);
+
+		try {
 			this.defaultUserAgent = getConfig().getString(DEFAULT_USER_AGENT, DEFAULT_DEFAULT_USER_AGENT);
 		} catch (Exception e) {
             log.error("Error while loading the option defaultUserAgent: " + e.getMessage(), e);
@@ -523,8 +542,17 @@ public class ConnectionParam extends AbstractParam {
 		return timeoutInSecs;
 	}
 	public void setTimeoutInSecs(int timeoutInSecs) {
-		this.timeoutInSecs = timeoutInSecs;
+		setTimeoutInSecsImpl(timeoutInSecs);
 		getConfig().setProperty(TIMEOUT_IN_SECS, this.timeoutInSecs);
+	}
+
+	private void setTimeoutInSecsImpl(int timeoutInSecs) {
+		if (timeoutInSecs < 0) {
+			this.timeoutInSecs = 0;
+			return;
+		}
+
+		this.timeoutInSecs = timeoutInSecs;
 	}
     
 	/**
@@ -720,7 +748,7 @@ public class ConnectionParam extends AbstractParam {
         }
 
         this.securityProtocolsEnabled = Arrays.copyOf(enabledProtocols, enabledProtocols.length);
-        SSLConnector.setClientEnabledProtocols(enabledProtocols);
+        setClientEnabledProtocols();
     }
 
     private void loadSecurityProtocolsEnabled() {
@@ -728,9 +756,21 @@ public class ConnectionParam extends AbstractParam {
         if (protocols.size() != 0) {
             securityProtocolsEnabled = new String[protocols.size()];
             securityProtocolsEnabled = protocols.toArray(securityProtocolsEnabled);
-            SSLConnector.setClientEnabledProtocols(securityProtocolsEnabled);
+            setClientEnabledProtocols();
         } else {
             setSecurityProtocolsEnabled(SSLConnector.getClientEnabledProtocols());
+        }
+    }
+
+    private void setClientEnabledProtocols() {
+        try {
+            SSLConnector.setClientEnabledProtocols(securityProtocolsEnabled);
+        } catch (IllegalArgumentException e) {
+            log.warn(
+                    "Failed to set persisted protocols " + Arrays.toString(securityProtocolsEnabled) + " falling back to "
+                            + Arrays.toString(SSLConnector.getFailSafeProtocols()) + " caused by: " + e.getMessage());
+            securityProtocolsEnabled = SSLConnector.getFailSafeProtocols();
+            SSLConnector.setClientEnabledProtocols(securityProtocolsEnabled);
         }
     }
     

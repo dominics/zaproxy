@@ -30,8 +30,7 @@ RUN apt-get update && apt-get install -q -y --fix-missing \
 RUN pip install --upgrade pip
 RUN gem install zapr
 RUN pip install zapcli
-# Install latest dev version of the python API
-RUN pip install https://github.com/zaproxy/zap-api-python/releases/download/0.0.9.dev1/python-owasp-zap-v2.4-0.0.9.dev1.tar.gz
+RUN pip install python-owasp-zap-v2.4
 
 RUN useradd -d /home/zap -m -s /bin/bash zap 
 RUN echo zap:zap | chpasswd
@@ -55,7 +54,8 @@ RUN curl -s https://raw.githubusercontent.com/zaproxy/zap-admin/master/ZapVersio
 	rm -R ZAP* && \
 	curl -s -L https://bitbucket.org/meszarv/webswing/downloads/webswing-2.3-distribution.zip > webswing.zip && \
 	unzip *.zip && \
-	rm *.zip
+	rm *.zip && \
+	touch AcceptedLicense
 
 
 ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64/
@@ -68,8 +68,8 @@ ENV HOME /home/zap/
 
 
 COPY zap-x.sh /zap/ 
-COPY zap-baseline.py /zap/ 
-COPY zap-webswing.sh /zap/ 
+COPY zap-*.* /zap/ 
+COPY zap_*.* /zap/ 
 COPY webswing.config /zap/webswing-2.3/ 
 COPY policies /home/zap/.ZAP_D/policies/
 COPY .xinitrc /home/zap/
@@ -87,5 +87,5 @@ RUN chown zap:zap /zap/zap-x.sh && \
 	chmod a+x /home/zap/.xinitrc
 #Change back to zap at the end
 USER zap
-
+HEALTHCHECK --retries=5 --interval=5s CMD zap-cli status
 

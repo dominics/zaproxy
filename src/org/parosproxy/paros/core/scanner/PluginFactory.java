@@ -46,6 +46,9 @@
 // ZAP: 2016/06/27 Reduce log level when loading the plugins
 // ZAP: 2016/06/29 Do not log when cloning PluginFactory
 // ZAP: 2016/07/25 Fix to correct handling of lists in plugins
+// ZAP: 2017/06/20 Allow to obtain a Plugin by ID.
+// ZAP: 2017/07/05 Log an error if the Plugin does not have a defined ID.
+// ZAP: 2017/07/12 Order dependencies before dependent plugins (Issue 3154) and tweak status comparison.
 
 package org.parosproxy.paros.core.scanner;
 
@@ -53,6 +56,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,6 +74,7 @@ public class PluginFactory {
 
     private static Logger log = Logger.getLogger(PluginFactory.class);
     private static List<AbstractPlugin> loadedPlugins = null;
+    private static Map<Integer, Plugin> mapLoadedPlugins;
     
     private List<Plugin> listAllPlugin = new ArrayList<Plugin>();
     private LinkedHashMap<Integer, Plugin> mapAllPlugin = new LinkedHashMap<>();  				//insertion-ordered
@@ -94,7 +99,31 @@ public class PluginFactory {
 	    	loadedPlugins.addAll(ExtensionFactory.getAddOnLoader().getActiveScanRules());
 	        //sort by the criteria below.
 	        Collections.sort(loadedPlugins, riskComparator);
+
+            mapLoadedPlugins = new HashMap<>();
+            for (Plugin plugin : loadedPlugins) {
+                checkPluginId(plugin);
+                mapLoadedPlugins.put(plugin.getId(), plugin);
+            }
     	}
+    }
+
+    private static void checkPluginId(Plugin plugin) {
+        if (plugin.getId() == -1) {
+            log.error("The active scan rule [" + plugin.getClass().getCanonicalName() + "] does not have a defined ID.");
+        }
+    }
+
+    /**
+     * Gets the {@code Plugin} with the given ID.
+     *
+     * @param id the ID of the plugin.
+     * @return the {@code Plugin}, or {@code null} if not found (e.g. not installed).
+     * @since TODO add version
+     */
+    public static Plugin getLoadedPlugin(int id) {
+        initPlugins();
+        return mapLoadedPlugins.get(id);
     }
     
     private static List<AbstractPlugin> getLoadedPlugins() {
@@ -139,7 +168,9 @@ public class PluginFactory {
      */
     public static void loadedPlugin(AbstractPlugin plugin) {
         if (!isPluginLoadedImpl(plugin)) {
+            checkPluginId(plugin);
             getLoadedPlugins().add(plugin);
+            mapLoadedPlugins.put(plugin.getId(), plugin);
             Collections.sort(loadedPlugins, riskComparator);
         }
     }
@@ -169,6 +200,7 @@ public class PluginFactory {
         for (Iterator<AbstractPlugin> it = getLoadedPlugins().iterator(); it.hasNext();) {
             if (it.next() == plugin) {
                 it.remove();
+                mapLoadedPlugins.remove(plugin.getId());
                 return;
             }
         }
@@ -188,6 +220,7 @@ public class PluginFactory {
     	for (AbstractPlugin plugin : loadedPlugins) {
             if (plugin.getClass().getName().equals(className)) {
             	loadedPlugins.remove(plugin);
+            	mapLoadedPlugins.remove(plugin.getId());
             	return true;
             }
     	}
@@ -198,16 +231,12 @@ public class PluginFactory {
     private static final Comparator<AbstractPlugin> riskComparator = new Comparator<AbstractPlugin>() {
         @Override
         public int compare(AbstractPlugin e1, AbstractPlugin e2) {
-        	if (e1.getStatus().ordinal() > e2.getStatus().ordinal()) {
-            	//High Risk alerts are checked before low risk alerts
-                return -1;
-        		
-        	}
-        	if (e1.getStatus().ordinal() < e2.getStatus().ordinal()) {
-            	//High Risk alerts are checked before low risk alerts
-                return 1;
-        		
-        	}
+            // Run stable plugins first
+            int res = e1.getStatus().compareTo(e2.getStatus());
+            if (res != 0) {
+                return -res;
+            }
+
             if (e1.getRisk() > e2.getRisk()) {
             	//High Risk alerts are checked before low risk alerts
                 return -1;
@@ -255,7 +284,10 @@ public class PluginFactory {
                 // ZAP: Removed unnecessary cast.
                 plugin = iterator.next();
                 if (plugin.isEnabled()) {
-                    listPending.add(plugin);
+                    addAllDependencies(plugin, listPending);
+                    if (!listPending.contains(plugin)) {
+                        listPending.add(plugin);
+                    }
                 }
             }
             
@@ -304,8 +336,8 @@ public class PluginFactory {
             if (pluginDep == null) {
                 allDepsAvailable = false;
             } else if (!to.contains(pluginDep)) {
-                to.add(pluginDep);
                 allDepsAvailable &= addAllDependencies(pluginDep, to);
+                to.add(pluginDep);
             }
         }
         return allDepsAvailable;

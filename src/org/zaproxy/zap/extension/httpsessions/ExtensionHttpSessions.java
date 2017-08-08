@@ -125,6 +125,11 @@ public class ExtensionHttpSessions extends ExtensionAdaptor implements SessionCh
 	}
 
 	@Override
+	public String getUIName() {
+		return Constant.messages.getString("httpsessions.name");
+	}
+	
+	@Override
 	public String getAuthor() {
 		return Constant.ZAP_TEAM;
 	}
@@ -158,7 +163,7 @@ public class ExtensionHttpSessions extends ExtensionAdaptor implements SessionCh
 
 		extensionHook.addSessionListener(this);
 		extensionHook.addSiteMapListener(this);
-		HttpSender.addListener(this);
+		extensionHook.addHttpSenderListener(this);
 
 		if (getView() != null) {
 

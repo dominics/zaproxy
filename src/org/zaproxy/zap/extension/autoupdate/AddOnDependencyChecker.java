@@ -129,7 +129,7 @@ class AddOnDependencyChecker {
                 if (AddOn.InstallationStatus.AVAILABLE == availableAddOns.getAddOn(dep.getId()).getInstallationStatus()) {
                     installs.add(dep);
                 }
-            } else if (!addOn.dependsOn(installed)) {
+            } else if (dep.isUpdateTo(installed)) {
                 if (AddOn.InstallationStatus.AVAILABLE == availableAddOns.getAddOn(dep.getId()).getInstallationStatus()) {
                     oldVersions.add(installed);
                     newVersions.add(dep);
@@ -909,7 +909,7 @@ class AddOnDependencyChecker {
             case 0:
                 return addOn.getName();
             case 1:
-                return Integer.valueOf(addOn.getFileVersion());
+                return addOn.getVersion();
             case 2:
                 return addOn.getMinimumJavaVersion();
             default:

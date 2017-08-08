@@ -35,6 +35,7 @@ import org.parosproxy.paros.control.Control;
 import org.parosproxy.paros.control.Control.Mode;
 import org.parosproxy.paros.core.scanner.Plugin;
 import org.parosproxy.paros.core.scanner.Plugin.AlertThreshold;
+import org.parosproxy.paros.extension.Extension;
 import org.parosproxy.paros.extension.ExtensionAdaptor;
 import org.parosproxy.paros.extension.ExtensionHook;
 import org.parosproxy.paros.extension.ExtensionLoader;
@@ -63,10 +64,10 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
     private PassiveScanThread pst = null;
     private boolean passiveScanEnabled;
     private PassiveScanParam passiveScanParam;
-    private static final List<Class<?>> DEPENDENCIES;
+    private static final List<Class<? extends Extension>> DEPENDENCIES;
 
     static {
-        List<Class<?>> dep = new ArrayList<>(1);
+        List<Class<? extends Extension>> dep = new ArrayList<>(1);
         dep.add(ExtensionAlert.class);
 
         DEPENDENCIES = Collections.unmodifiableList(dep);
@@ -91,6 +92,11 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
         passiveScanEnabled = true;
     }
 
+    @Override
+    public String getUIName() {
+    	return Constant.messages.getString("pscan.name");
+    }
+    
     @Override
     public void hook(ExtensionHook extensionHook) {
         super.hook(extensionHook);
@@ -314,12 +320,27 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
      * @param enabled {@code true} if the scanner should be enabled, {@code false} otherwise
      */
     void setPluginPassiveScannerEnabled(int pluginId, boolean enabled) {
+        PluginPassiveScanner scanner = getPluginPassiveScanner(pluginId);
+        if (scanner != null) {
+            scanner.setEnabled(enabled);
+            scanner.save();
+        }
+    }
+
+    /**
+     * Gets the {@code PluginPassiveScanner} with the given ID.
+     *
+     * @param id the ID of the plugin.
+     * @return the {@code PluginPassiveScanner}, or {@code null} if not found (e.g. not installed).
+     * @since TODO add version
+     */
+    public PluginPassiveScanner getPluginPassiveScanner(int id) {
         for (PluginPassiveScanner scanner : getPluginPassiveScanners()) {
-            if (pluginId == scanner.getPluginId()) {
-                scanner.setEnabled(enabled);
-                scanner.save();
+            if (id == scanner.getPluginId()) {
+                return scanner;
             }
         }
+        return null;
     }
 
     /**
@@ -329,12 +350,7 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
      * @return {@code true} if the scanner exist, {@code false} otherwise.
      */
     boolean hasPluginPassiveScanner(int pluginId) {
-        for (PluginPassiveScanner scanner : getPluginPassiveScanners()) {
-            if (pluginId == scanner.getPluginId()) {
-                return true;
-            }
-        }
-        return false;
+        return getPluginPassiveScanner(pluginId) != null;
     }
 
     /**
@@ -348,12 +364,11 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
      * @see org.parosproxy.paros.core.scanner.Plugin.AlertThreshold
      */
     void setPluginPassiveScannerAlertThreshold(int pluginId, Plugin.AlertThreshold alertThreshold) {
-        for (PluginPassiveScanner scanner : getPluginPassiveScanners()) {
-            if (pluginId == scanner.getPluginId()) {
-                scanner.setLevel(alertThreshold);
-                scanner.setEnabled(!Plugin.AlertThreshold.OFF.equals(alertThreshold));
-                scanner.save();
-            }
+        PluginPassiveScanner scanner = getPluginPassiveScanner(pluginId);
+        if (scanner != null) {
+            scanner.setAlertThreshold(alertThreshold);
+            scanner.setEnabled(!Plugin.AlertThreshold.OFF.equals(alertThreshold));
+            scanner.save();
         }
     }
  
@@ -363,7 +378,7 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
      */
     public void setAllScannerThreshold(AlertThreshold at) {
         for (PluginPassiveScanner test : getPluginPassiveScanners()) {        
-            test.setLevel(at);
+            test.setAlertThreshold(at);
             test.setEnabled(!AlertThreshold.OFF.equals(at));
             test.save();
         }
@@ -378,9 +393,9 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
         
         for (PluginPassiveScanner test : getPluginPassiveScanners()) {                
             if (at == null) {
-                at = test.getLevel();
+                at = test.getAlertThreshold();
             
-            } else if (!at.equals(test.getLevel())) {
+            } else if (!at.equals(test.getAlertThreshold())) {
                 // Not all the same
                 return null;
             }
@@ -469,7 +484,7 @@ public class ExtensionPassiveScan extends ExtensionAdaptor implements SessionCha
     }
 
     @Override
-    public List<Class<?>> getDependencies() {
+    public List<Class<? extends Extension>> getDependencies() {
         return DEPENDENCIES;
     }
 

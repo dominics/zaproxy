@@ -63,6 +63,8 @@
 // ZAP: 2016/12/07 Add initiator constant for AJAX spider requests
 // ZAP: 2016/12/12 Add initiator constant for Forced Browse requests
 // ZAP: 2017/03/27 Introduce HttpRequestConfig.
+// ZAP: 2017/06/12 Allow to ignore listeners.
+// ZAP: 2017/06/19 Allow to send a request with custom socket timeout.
 
 package org.parosproxy.paros.network;
 
@@ -474,6 +476,10 @@ public class HttpSender {
 
 	// ZAP: Make sure a message that needs to be authenticated is authenticated
 	private void sendAuthenticated(HttpMessage msg, boolean isFollowRedirect) throws IOException {
+		sendAuthenticated(msg, isFollowRedirect, null);
+	}
+
+	private void sendAuthenticated(HttpMessage msg, boolean isFollowRedirect, HttpMethodParams params) throws IOException {
 		// Modify the request message if a 'Requesting User' has been set
 		User forceUser = this.getUser(msg);
 		if (initiator != AUTHENTICATION_INITIATOR && forceUser != null)
@@ -481,7 +487,7 @@ public class HttpSender {
 
 		log.debug("Sending message to: " + msg.getRequestHeader().getURI().toString());
 		// Send the message
-		send(msg, isFollowRedirect);
+		send(msg, isFollowRedirect, params);
 
 		// If there's a 'Requesting User', make sure the response corresponds to an authenticated
 		// session and, if not, attempt a reauthentication and try again
@@ -492,18 +498,18 @@ public class HttpSender {
 					+ ". Authenticating and trying again...");
 			forceUser.queueAuthentication(msg);
 			forceUser.processMessageToMatchUser(msg);
-			send(msg, isFollowRedirect);
+			send(msg, isFollowRedirect, params);
 		} else
 			log.debug("SUCCESSFUL");
 
 	}
 
-	private void send(HttpMessage msg, boolean isFollowRedirect) throws IOException {
+	private void send(HttpMessage msg, boolean isFollowRedirect, HttpMethodParams params) throws IOException {
 		HttpMethod method = null;
 		HttpResponseHeader resHeader = null;
 
 		try {
-			method = runMethod(msg, isFollowRedirect);
+			method = runMethod(msg, isFollowRedirect, params);
 			// successfully executed;
 			resHeader = HttpMethodHelper.getHttpResponseHeader(method);
 			resHeader.setHeader(HttpHeader.TRANSFER_ENCODING, null); // replaceAll("Transfer-Encoding: chunked\r\n",
@@ -530,11 +536,11 @@ public class HttpSender {
 		}
 	}
 
-	private HttpMethod runMethod(HttpMessage msg, boolean isFollowRedirect) throws IOException {
+	private HttpMethod runMethod(HttpMessage msg, boolean isFollowRedirect, HttpMethodParams params) throws IOException {
 		HttpMethod method = null;
 		// no more retry
 		modifyUserAgent(msg);
-		method = helper.createRequestMethod(msg.getRequestHeader(), msg.getRequestBody());
+		method = helper.createRequestMethod(msg.getRequestHeader(), msg.getRequestBody(), params);
 		if (!(method instanceof EntityEnclosingMethod)) {
 			// cant do this for EntityEnclosingMethod methods - it will fail
 			method.setFollowRedirects(isFollowRedirect);
@@ -849,10 +855,52 @@ public class HttpSender {
             throw new IllegalArgumentException("Parameter requestConfig must not be null.");
         }
 
-        sendAndReceive(message, false);
+        sendAndReceiveImpl(message, requestConfig);
 
         if (requestConfig.isFollowRedirects()) {
             followRedirections(message, requestConfig);
+        }
+    }
+
+    /**
+     * Helper method that sends the request of the given HTTP {@code message} with the given configurations.
+     * <p>
+     * No redirections are followed (see {@link #followRedirections(HttpMessage, HttpRequestConfig)}).
+     *
+     * @param message the message that will be sent.
+     * @param requestConfig the request configurations.
+     * @throws IOException if an error occurred while sending the message or following the redirections.
+     */
+    private void sendAndReceiveImpl(HttpMessage message, HttpRequestConfig requestConfig) throws IOException {
+        if (log.isDebugEnabled()) {
+            log.debug("Sending " + message.getRequestHeader().getMethod() + " " + message.getRequestHeader().getURI());
+        }
+        message.setTimeSentMillis(System.currentTimeMillis());
+
+        try {
+            if (requestConfig.isNotifyListeners()) {
+                notifyRequestListeners(message);
+            }
+
+            HttpMethodParams params = null;
+            if (requestConfig.getSoTimeout() != HttpRequestConfig.NO_VALUE_SET) {
+                params = new HttpMethodParams();
+                params.setSoTimeout(requestConfig.getSoTimeout());
+            }
+            sendAuthenticated(message, false, params);
+
+        } finally {
+            message.setTimeElapsedMillis((int) (System.currentTimeMillis() - message.getTimeSentMillis()));
+
+            if (log.isDebugEnabled()) {
+                log.debug(
+                        "Received response after " + message.getTimeElapsedMillis() + "ms for "
+                                + message.getRequestHeader().getMethod() + " " + message.getRequestHeader().getURI());
+            }
+
+            if (requestConfig.isNotifyListeners()) {
+                notifyResponseListeners(message);
+            }
         }
     }
 
@@ -891,7 +939,7 @@ public class HttpSender {
                 redirectMessage.setRequestBody("");
             }
 
-            sendAndReceive(redirectMessage, false);
+            sendAndReceiveImpl(redirectMessage, requestConfig);
             validator.notifyMessageReceived(redirectMessage);
 
             // Update the response of the (original) message

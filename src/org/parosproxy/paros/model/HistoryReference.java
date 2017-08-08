@@ -47,14 +47,22 @@
 // ZAP: 2016/08/30 Use a Set instead of a List for the alerts
 // ZAP: 2017/02/07 Add TYPE_SPIDER_AJAX_TEMPORARY.
 // ZAP: 2017/03/19 Add TYPE_SPIDER_TEMPORARY.
+// ZAP: 2017/05/03 Notify tag changes.
+// ZAP: 2017/05/17 Allow to obtain the tags of a message.
+// ZAP: 2017/05/31 Add a multi-catch for a specific handler. 
+// ZAP: 2017/06/08 Allow to keep the HttpMessage in memory for immediate reuse.
+// ZAP: 2017/06/13 Notify when a note is set.
+// ZAP: 2017/07/04 Notify when a HistoryReference is deleted.
 
 package org.parosproxy.paros.model;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.Vector;
 
@@ -70,6 +78,9 @@ import org.parosproxy.paros.db.TableHistory;
 import org.parosproxy.paros.db.TableTag;
 import org.parosproxy.paros.network.HttpMalformedHeaderException;
 import org.parosproxy.paros.network.HttpMessage;
+import org.zaproxy.zap.ZAP;
+import org.zaproxy.zap.eventBus.Event;
+import org.zaproxy.zap.model.Target;
 
 
 /**
@@ -180,6 +191,7 @@ public class HistoryReference {
      * <li>{@link #TYPE_SPIDER_TASK};</li>
      * <li>{@link #TYPE_SEQUENCE_TEMPORARY};</li>
      * <li>{@link #TYPE_SPIDER_AJAX_TEMPORARY};</li>
+     * <li>{@link #TYPE_SPIDER_TEMPORARY};</li>
      * </ul>
      * <p>
      * Persisted messages with temporary types are deleted when the session is closed.
@@ -269,6 +281,7 @@ public class HistoryReference {
 
     private static Logger log = Logger.getLogger(HistoryReference.class);
 
+    private HttpMessage httpMessage;
     private HttpMessageCachedData httpMessageCachedData;
 
 	/**
@@ -279,6 +292,26 @@ public class HistoryReference {
     }
 
     public HistoryReference(int historyId) throws HttpMalformedHeaderException, DatabaseException {
+		this(historyId, false);
+	}
+
+	/**
+	 * Constructs a {@code HistoryReference} with the given ID and whether or not the {@code HttpMessage} read from the database
+	 * should be kept in memory.
+	 * <p>
+	 * <strong>Note:</strong> This constructor should be used with care as the {@code HttpMessage} might be kept in memory
+	 * (until this instance is garbage collected or {@link #clearHttpMessage() manually cleared}). It should be used only when
+	 * the contents of the {@code HttpMessage} are used immediately after creating the {@code HistoryReference}, avoiding
+	 * reading the {@code HttpMessage} once again.
+	 *
+	 * @param historyId the ID of the message persisted to database
+	 * @param keepMessage {@code true} if the {@code HttpMessage} should be kept in memory, {@code false} otherwise.
+	 * @throws HttpMalformedHeaderException if an error occurred while parsing the message.
+	 * @throws DatabaseException if an error occurred while reading the message.
+	 * @since TODO add version
+	 * @see #getHttpMessage()
+	 */
+	public HistoryReference(int historyId, boolean keepMessage) throws HttpMalformedHeaderException, DatabaseException {
 		RecordHistory history = null;
 		this.icons =  new ArrayList<>();
 		this.clearIfManual = new ArrayList<>();
@@ -288,13 +321,14 @@ public class HistoryReference {
 		}
 		HttpMessage msg = history.getHttpMessage();
  	   	// ZAP: Support for multiple tags
-		List<RecordTag> rtags = staticTableTag.getTagsForHistoryID(historyId);
-		for (RecordTag rtag : rtags) {
-			this.tags.add(rtag.getTag());
-		}
+		this.tags = getTags(historyId);
 
 		
 		build(history.getSessionId(), history.getHistoryId(), history.getHistoryType(), msg);
+
+		if (keepMessage) {
+			httpMessage = msg;
+		}
 	}
 	
 	public HistoryReference(Session session, int historyType, HttpMessage msg) throws HttpMalformedHeaderException, DatabaseException {
@@ -306,10 +340,7 @@ public class HistoryReference {
 		build(session.getSessionId(), history.getHistoryId(), history.getHistoryType(), msg);
 		// ZAP: Init HttpMessage HistoryReference field
 		msg.setHistoryRef(this);
-		List <RecordTag> rtags = staticTableTag.getTagsForHistoryID(historyId);
-		for (RecordTag rtag : rtags) {
-			this.tags.add(rtag.getTag());
-		}
+		this.tags = getTags(historyId);
 		
 		// ZAP: Support for loading the alerts from the db
 		List<RecordAlert> alerts = staticTableAlert.getAlertsBySourceHistoryId(historyId);
@@ -388,6 +419,10 @@ public class HistoryReference {
 	 * @throws SQLException the sQL exception
 	 */
 	public HttpMessage getHttpMessage() throws HttpMalformedHeaderException, DatabaseException {
+		if (httpMessage != null) {
+			return httpMessage;
+		}
+
 		// fetch complete message
 		RecordHistory history = staticTableHistory.read(historyId);
 		if (history == null) {
@@ -396,6 +431,16 @@ public class HistoryReference {
 		// ZAP: Init HttpMessage HistoryReference field
 		history.getHttpMessage().setHistoryRef(this);
 		return history.getHttpMessage();
+	}
+
+	/**
+	 * Clears the {@code HttpMessage} kept in memory.
+	 * 
+	 * @since TODO add version
+	 * @see #HistoryReference(int, boolean)
+	 */
+	public void clearHttpMessage() {
+		httpMessage = null;
 	}
 	
 	public URI getURI() {
@@ -413,9 +458,7 @@ public class HistoryReference {
 	    try {
 	        msg = getHttpMessage();
             display = getDisplay(msg);	        
-	    } catch (HttpMalformedHeaderException e1) {
-	        display = "";
-	    } catch (DatabaseException e) {
+	    } catch (HttpMalformedHeaderException | DatabaseException e1) {
 	        display = "";
 	    }
         return display;
@@ -439,6 +482,7 @@ public class HistoryReference {
         	   // ZAP: Support for multiple tags
                staticTableTag.deleteTagsForHistoryID(historyId);
                staticTableHistory.delete(historyId);
+               notifyEvent(HistoryReferenceEventPublisher.EVENT_REMOVED);
            } catch (DatabaseException e) {
         	   log.error(e.getMessage(), e);
            }
@@ -474,22 +518,46 @@ public class HistoryReference {
    
    	// ZAP: Support for multiple tags
    	public void addTag(String tag) {
-   		try {
-   			staticTableTag.insert(historyId, tag);
+   		if (insertTagDb(tag)) {
    			this.tags.add(tag);
-   		} catch (DatabaseException e) {
-   			log.error(e.getMessage(), e);
+   			notifyEvent(HistoryReferenceEventPublisher.EVENT_TAG_ADDED);
    		}
    	}
+
+    private boolean insertTagDb(String tag) {
+        try {
+            staticTableTag.insert(historyId, tag);
+            return true;
+        } catch (DatabaseException e) {
+            log.error("Failed to persist tag: " + e.getMessage(), e);
+        }
+        return false;
+    }
+
+    private void notifyEvent(String event) {
+        Map<String, String> map = new HashMap<>();
+        map.put(HistoryReferenceEventPublisher.FIELD_HISTORY_REFERENCE_ID, Integer.toString(historyId));
+        ZAP.getEventBus().publishSyncEvent(
+                HistoryReferenceEventPublisher.getPublisher(),
+                new Event(HistoryReferenceEventPublisher.getPublisher(), event, new Target(getSiteNode()), map));
+    }
    
    	public void deleteTag(String tag) {
-   		try {
-   			staticTableTag.delete(historyId, tag);
+   		if (deleteTagDb(tag)) {
    			this.tags.remove(tag);
-   		} catch (DatabaseException e) {
-   			log.error(e.getMessage(), e);
+   			notifyEvent(HistoryReferenceEventPublisher.EVENT_TAG_REMOVED);
    		}
    	}
+
+    private boolean deleteTagDb(String tag) {
+        try {
+            staticTableTag.delete(historyId, tag);
+            return true;
+        } catch (DatabaseException e) {
+            log.error("Failed to delete tag: " + e.getMessage(), e);
+        }
+        return false;
+    }
 
 	public List<String> getTags() {
 		return this.tags;
@@ -500,6 +568,7 @@ public class HistoryReference {
        try {
            staticTableHistory.updateNote(historyId, note);
            httpMessageCachedData.setNote(note != null && note.length() > 0);
+           notifyEvent(HistoryReferenceEventPublisher.EVENT_NOTE_SET);
        } catch (DatabaseException e) {
            log.error(e.getMessage(), e);
        }
@@ -651,8 +720,46 @@ public class HistoryReference {
 		return httpMessageCachedData.getRtt();
 	}
 
+	/**
+	 * Sets the tags for the HTTP message.
+	 *
+	 * @param tags the new tags.
+	 * @throws IllegalArgumentException if the given parameter is {@code null}.
+	 * @since TODO add version
+	 * @see #addTag(String)
+	 * @see #deleteTag(String)
+	 */
+	public void setTags(List<String> tags) {
+		if (tags == null) {
+			throw new IllegalArgumentException("Parameter tags must not be null.");
+		}
+
+		for (String tag : tags) {
+			if (!this.tags.contains(tag)) {
+				insertTagDb(tag);
+			}
+		}
+
+		for (String tag : this.tags) {
+			if (!tags.contains(tag)) {
+				deleteTagDb(tag);
+			}
+		}
+
+		this.tags = new ArrayList<>(tags);
+		notifyEvent(HistoryReferenceEventPublisher.EVENT_TAGS_SET);
+	}
+
+	/**
+	 * Sets the tags for the HTTP message.
+	 *
+	 * @param tags the new tags.
+	 * @throws IllegalArgumentException if the given parameter is {@code null}.
+	 * @deprecated (TODO add version) Use {@link #setTags(List)} instead.
+	 */
+	@Deprecated
 	public void setTags(Vector<String> tags) {
-		this.tags = tags;
+		setTags((List<String>) tags);
 	}
 	
 	public boolean hasNote() {
@@ -751,5 +858,26 @@ public class HistoryReference {
 		synchronized (TEMPORARY_HISTORY_TYPES) {
 			return new HashSet<>(TEMPORARY_HISTORY_TYPES);
 		}
+	}
+
+	/**
+	 * Gets the tags of the message with the given history ID.
+	 *
+	 * @param historyId the history ID.
+	 * @return a {@code List} with the tags of the message, never {@code null}.
+	 * @throws DatabaseException if an error occurred while obtaining the tags from the database.
+	 * @since TODO add version
+	 */
+	public static List<String> getTags(int historyId) throws DatabaseException {
+		if (staticTableTag == null) {
+			return new ArrayList<>();
+		}
+
+		List<String> tags = new ArrayList<>();
+		List<RecordTag> rtags = staticTableTag.getTagsForHistoryID(historyId);
+		for (RecordTag rtag : rtags) {
+			tags.add(rtag.getTag());
+		}
+		return tags;
 	}
 }

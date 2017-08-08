@@ -70,6 +70,9 @@ Scanners:
 10053   Apache Range Header DoS (CVE-2011-3192)
 10054   Cookie set without SameSite attribute
 10055   Content Security Policy Scanner
+10056   X-Debug-Token Scanner
+10057   Username Hash iDOR Scanner
+10058   GET for POST Scanner
 10094   Base64 Disclosure
 10095   Backup File Disclosure
 10096   Timestamp Disclosure
@@ -139,6 +142,8 @@ Scanners:
 40025   Proxy Disclosure
 40026   Cross site scripting (DOM)
 40027   SQL Injection MsSQL
+40028   ELMAH Scanner
+40029   trace.axd Scanner
 
 50000   Active Scan scripts
 50001   Passive Scan scripts
@@ -166,4 +171,10 @@ Scanners:
 90029   SOAP XML Injection
 90030   WSDL File Detection
 90033   Loosely Scoped Cookie
+
+100000  Client/Server HTTP Error Response Codes [Script]
+100001  Unexpected Content Types [Script]
+
+322420463 Retire.js
+
 ```
